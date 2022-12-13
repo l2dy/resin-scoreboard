@@ -32,36 +32,43 @@ package io.sourceforge.l2dy.resin;
 import com.caucho.admin.thread.ResinThreadActivityReport;
 import com.caucho.admin.thread.ThreadActivityGroup;
 import com.caucho.admin.thread.ThreadSnapshot;
+import com.caucho.admin.thread.filter.AnyThreadFilter;
+import com.caucho.admin.thread.filter.CauchoThreadFilter;
+import com.caucho.admin.thread.filter.PortThreadFilter;
 import com.caucho.management.server.PortMXBean;
 import com.caucho.management.server.ServerMXBean;
 import com.caucho.management.server.TcpConnectionInfo;
-import com.caucho.server.cluster.ServletService;
+import io.sourceforge.l2dy.resin.beans.RemoteConnection;
 
+import javax.management.JMX;
+import javax.management.MBeanServerConnection;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
 
 public class ThreadActivityReport extends ResinThreadActivityReport {
     private static final Logger log = Logger.getLogger(ThreadActivityReport.class.getName());
 
-    public ThreadActivityGroup[] execute(ThreadMXBean threadMXBean, boolean greedy) {
+    public ThreadActivityGroup[] execute(ThreadMXBean threadMXBean, ServerMXBean serverMXBean, boolean greedy) {
         ThreadInfo[] threadInfos = threadMXBean.dumpAllThreads(true, true);
         if (threadInfos == null || threadInfos.length == 0) {
             log.fine("execute failed: ThreadMXBean.dumpAllThreads produced no results");
             return null;
         }
 
-        ThreadSnapshot[] threads = createThreadSnapshots(threadInfos);
+        ThreadSnapshot[] threads = createThreadSnapshots(serverMXBean, threadInfos);
 
-        ThreadActivityGroup[] groups = partitionThreads(threads, greedy);
+        ThreadActivityGroup[] groups = partitionThreads(serverMXBean, threads, greedy);
 
         return groups;
     }
 
-    private ThreadSnapshot[] createThreadSnapshots(ThreadInfo[] threadInfos) {
-        Map<Long, TcpConnectionInfo> connectionsById = getConnectionsById();
+    private ThreadSnapshot[] createThreadSnapshots(ServerMXBean serverMXBean, ThreadInfo[] threadInfos) {
+        Map<Long, TcpConnectionInfo> connectionsById = getConnectionsById(serverMXBean);
 
         ThreadSnapshot[] threads = new ThreadSnapshot[threadInfos.length];
 
@@ -78,26 +85,23 @@ public class ThreadActivityReport extends ResinThreadActivityReport {
         return threads;
     }
 
-    private Map<Long, TcpConnectionInfo> getConnectionsById() {
+    private Map<Long, TcpConnectionInfo> getConnectionsById(ServerMXBean serverMXBean) {
         Map<Long, TcpConnectionInfo> connectionInfoMap = new HashMap<Long, TcpConnectionInfo>();
 
-        ServletService servletService = ServletService.getCurrent();
-        if (servletService != null) {
-            ServerMXBean serverAdmin = servletService.getAdmin();
+        if (serverMXBean != null) {
+            PortMXBean[] ports = serverMXBean.getPorts();
+            MBeanServerConnection connection = RemoteConnection.getServerConnection();
 
-            if (serverAdmin != null) {
-                PortMXBean[] ports = serverAdmin.getPorts();
+            if (ports != null) {
+                for (PortMXBean portMXBean : ports) {
+                    PortMXBean port = JMX.newMBeanProxy(connection, portMXBean.getObjectName(), PortMXBean.class);
+                    TcpConnectionInfo[] connectionInfos = port.connectionInfo();
 
-                if (ports != null) {
-                    for (PortMXBean port : ports) {
-                        TcpConnectionInfo[] connectionInfos = port.connectionInfo();
+                    if (connectionInfos != null) {
+                        for (TcpConnectionInfo connectionInfo : connectionInfos) {
+                            long threadId = connectionInfo.getThreadId();
 
-                        if (connectionInfos != null) {
-                            for (TcpConnectionInfo connectionInfo : connectionInfos) {
-                                long threadId = connectionInfo.getThreadId();
-
-                                connectionInfoMap.put(threadId, connectionInfo);
-                            }
+                            connectionInfoMap.put(threadId, connectionInfo);
                         }
                     }
                 }
@@ -107,8 +111,41 @@ public class ThreadActivityReport extends ResinThreadActivityReport {
         return connectionInfoMap;
     }
 
-    private ThreadActivityGroup[] partitionThreads(ThreadSnapshot[] threads, boolean greedy) {
-        ThreadActivityGroup[] groups = createGroups();
+    private ThreadActivityGroup[] createGroups(ServerMXBean serverMXBean) {
+        List<ThreadActivityGroup> groups = new ArrayList<ThreadActivityGroup>();
+
+        if (serverMXBean != null) {
+            PortMXBean[] ports = serverMXBean.getPorts();
+
+            if (ports != null) {
+                for (PortMXBean port : ports) {
+                    String portName = (port.getAddress() == null ? "*" : port.getAddress()) + ":" + port.getPort();
+
+                    String groupName = "Port " + portName + " Threads";
+
+                    PortThreadFilter filter = new PortThreadFilter(portName);
+                    ThreadActivityGroup group = new ThreadActivityGroup(groupName, filter);
+
+                    groups.add(group);
+                }
+            }
+        }
+
+
+        CauchoThreadFilter cauchoFilter = new CauchoThreadFilter();
+        groups.add(new ThreadActivityGroup("Resin Threads", cauchoFilter));
+
+        AnyThreadFilter miscFilter = new AnyThreadFilter();
+        groups.add(new ThreadActivityGroup("Other Threads", miscFilter));
+
+        ThreadActivityGroup[] array = new ThreadActivityGroup[groups.size()];
+        groups.toArray(array);
+
+        return array;
+    }
+
+    private ThreadActivityGroup[] partitionThreads(ServerMXBean serverMXBean, ThreadSnapshot[] threads, boolean greedy) {
+        ThreadActivityGroup[] groups = createGroups(serverMXBean);
 
         for (ThreadSnapshot thread : threads) {
             for (ThreadActivityGroup group : groups) {

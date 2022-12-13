@@ -18,11 +18,16 @@
 
 package io.sourceforge.l2dy.resin;
 
+import com.caucho.management.server.ServerMXBean;
 import com.sun.tools.attach.AttachNotSupportedException;
 import com.sun.tools.attach.VirtualMachine;
 import com.sun.tools.attach.VirtualMachineDescriptor;
+import io.sourceforge.l2dy.resin.beans.RemoteConnection;
 
+import javax.management.JMX;
 import javax.management.MBeanServerConnection;
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
 import javax.management.remote.JMXConnector;
 import javax.management.remote.JMXConnectorFactory;
 import javax.management.remote.JMXServiceURL;
@@ -38,6 +43,7 @@ public class ScoreboardApp {
     private static final Logger log = Logger.getLogger(ScoreboardApp.class.getName());
     private static final String MANAGEMENT_PREFIX = "com.sun.management.";
     private static final String CONNECTOR_ADDRESS = MANAGEMENT_PREFIX + "jmxremote.localConnectorAddress";
+    private static final String RESIN_SERVER_MXBEAN_NAME = "resin:type=Server";
 
     public static void main(String[] args) {
         if (args.length < 1) {
@@ -58,7 +64,7 @@ public class ScoreboardApp {
         }
     }
 
-    private static String execute(String id, boolean greedy, int lineWidth) throws IOException, AttachNotSupportedException {
+    private static String execute(String id, boolean greedy, int lineWidth) throws IOException, AttachNotSupportedException, MalformedObjectNameException {
         VirtualMachine virtualMachine = VirtualMachine.attach(id);
 
         String connectorAddress = virtualMachine.getAgentProperties().getProperty(CONNECTOR_ADDRESS);
@@ -75,8 +81,11 @@ public class ScoreboardApp {
         JMXConnector jmxConnector = JMXConnectorFactory.connect(jmxServiceURL);
 
         MBeanServerConnection server = jmxConnector.getMBeanServerConnection();
+        RemoteConnection.setServerConnection(server);
 
         ThreadMXBean threadMXBean = ManagementFactory.newPlatformMXBeanProxy(server, ManagementFactory.THREAD_MXBEAN_NAME, ThreadMXBean.class);
-        return ScoreboardAction.execute(threadMXBean, greedy, lineWidth);
+        ServerMXBean serverMXBean = JMX.newMXBeanProxy(server, new ObjectName(RESIN_SERVER_MXBEAN_NAME), ServerMXBean.class);
+
+        return ScoreboardAction.execute(threadMXBean, serverMXBean, greedy, lineWidth);
     }
 }

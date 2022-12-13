@@ -30,14 +30,15 @@
 package io.sourceforge.l2dy.resin;
 
 import com.caucho.admin.thread.ThreadActivityGroup;
+import com.caucho.management.server.ServerMXBean;
 
 import java.lang.management.ThreadMXBean;
 import java.util.Map;
 
 public class ScoreboardAction {
-    public static String execute(ThreadMXBean threadMXBean, boolean greedy, int lineWidth) {
+    public static String execute(ThreadMXBean threadMXBean, ServerMXBean serverMXBean, boolean greedy, int lineWidth) {
         ThreadActivityReport report = new ThreadActivityReport();
-        ThreadActivityGroup[] groups = report.execute(threadMXBean, greedy);
+        ThreadActivityGroup[] groups = report.execute(threadMXBean, serverMXBean, greedy);
 
         StringBuilder sb = new StringBuilder();
 
